@@ -53,9 +53,13 @@ from datasets.main import load_dataset
               help='Number of workers for data loading. 0 means that the data will be loaded in the main process.')
 @click.option('--normal_class', type=int, default=0,
               help='Specify the normal class of the dataset (all other classes are considered anomalous).')
+@click.option('--lambda_val', type=float, default=0.01, help='Specify lambda for stochastic gates loss.')
+@click.option('--use_stochastic_gates', type=bool, default=False, help='Use stochastic gates loss in pretrain.')
+
 def main(dataset_name, net_name, xp_path, data_path, load_config, load_model, objective, nu, device, seed,
          optimizer_name, lr, n_epochs, lr_milestone, batch_size, weight_decay, pretrain, ae_optimizer_name, ae_lr,
-         ae_n_epochs, ae_lr_milestone, ae_batch_size, ae_weight_decay, n_jobs_dataloader, normal_class):
+         ae_n_epochs, ae_lr_milestone, ae_batch_size, ae_weight_decay, n_jobs_dataloader, normal_class, lambda_val,
+         use_stochastic_gates):
     """
     Deep SVDD, a fully deep method for anomaly detection.
 
@@ -140,7 +144,9 @@ def main(dataset_name, net_name, xp_path, data_path, load_config, load_model, ob
                            batch_size=cfg.settings['ae_batch_size'],
                            weight_decay=cfg.settings['ae_weight_decay'],
                            device=device,
-                           n_jobs_dataloader=n_jobs_dataloader)
+                           n_jobs_dataloader=n_jobs_dataloader,
+                           lambda_val=lambda_val,
+                           use_stochastic_gates=use_stochastic_gates)
 
     # Log training details
     logger.info('Training optimizer: %s' % cfg.settings['optimizer_name'])

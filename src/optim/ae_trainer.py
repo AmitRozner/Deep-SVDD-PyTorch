@@ -2,7 +2,7 @@ from base.base_trainer import BaseTrainer
 from base.base_dataset import BaseADDataset
 from base.base_net import BaseNet
 from sklearn.metrics import roc_auc_score
-
+from torch.autograd import Variable
 import logging
 import time
 import torch
@@ -13,9 +13,12 @@ import numpy as np
 class AETrainer(BaseTrainer):
 
     def __init__(self, optimizer_name: str = 'adam', lr: float = 0.001, n_epochs: int = 150, lr_milestones: tuple = (),
-                 batch_size: int = 128, weight_decay: float = 1e-6, device: str = 'cuda', n_jobs_dataloader: int = 0):
+                 batch_size: int = 128, weight_decay: float = 1e-6, device: str = 'cuda', n_jobs_dataloader: int = 0,
+                 lambda_val: float = 0.1, use_stochastic_gates=False):
         super().__init__(optimizer_name, lr, n_epochs, lr_milestones, batch_size, weight_decay, device,
                          n_jobs_dataloader)
+        self.lambda_val = lambda_val
+        self.use_stochastic_gates = use_stochastic_gates
 
     def train(self, dataset: BaseADDataset, ae_net: BaseNet):
         logger = logging.getLogger()
@@ -25,6 +28,9 @@ class AETrainer(BaseTrainer):
 
         # Get train data loader
         train_loader, _ = dataset.loaders(batch_size=self.batch_size, num_workers=self.n_jobs_dataloader)
+
+        if self.use_stochastic_gates:
+            train_gates = Gates(train_loader.batch_sampler.sampler.data_source.indices)
 
         # Set optimizer (Adam optimizer for now)
         optimizer = optim.Adam(ae_net.parameters(), lr=self.lr, weight_decay=self.weight_decay,
@@ -47,7 +53,13 @@ class AETrainer(BaseTrainer):
             n_batches = 0
             epoch_start_time = time.time()
             for data in train_loader:
-                inputs, _, _ = data
+                inputs, _, sample_idx = data
+                if self.use_stochastic_gates:
+                    curr_gates = train_gates.fetch_gates(sample_idx)
+                else:
+                    curr_gates = torch.tensor(1).cuda()
+                    self.lambda_val = 0
+
                 inputs = inputs.to(self.device)
 
                 # Zero the network parameter gradients
@@ -56,7 +68,8 @@ class AETrainer(BaseTrainer):
                 # Update network parameters via backpropagation: forward + backward + optimize
                 outputs = ae_net(inputs)
                 scores = torch.sum((outputs - inputs) ** 2, dim=tuple(range(1, outputs.dim())))
-                loss = torch.mean(scores)
+                scores_times_gates = scores * curr_gates
+                loss = torch.mean(scores_times_gates) - self.lambda_val * torch.sum(curr_gates)
                 loss.backward()
                 optimizer.step()
 
@@ -118,3 +131,19 @@ class AETrainer(BaseTrainer):
         test_time = time.time() - start_time
         logger.info('Autoencoder testing time: %.3f' % test_time)
         logger.info('Finished testing autoencoder.')
+
+class Gates:
+    def __init__(self, indices):
+        self.num_of_gates = len(indices)
+        self.mu = Variable(torch.ones([self.num_of_gates]), requires_grad=True).cuda()
+
+        self.indices = np.array(indices)
+
+    def fetch_gates(self, curr_samples_ind):
+        relevant_indices = []
+        for i in curr_samples_ind:
+            relevant_indices.append(np.argwhere(self.indices == i.cpu().detach().numpy())[0][0])
+
+        unbounded_gates = self.mu[relevant_indices] + torch.randn(size=(len(relevant_indices),)).cuda()
+        clamped_gates = torch.clamp(unbounded_gates, min=0, max=1)
+        return clamped_gates

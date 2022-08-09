@@ -20,6 +20,7 @@ class AETrainer(BaseTrainer):
         self.lambda_val = lambda_val
         self.use_stochastic_gates = use_stochastic_gates
         self.sigma_gates = sigma_gates
+        self.train_gates = None
 
     def train(self, dataset: BaseADDataset, ae_net: BaseNet):
         logger = logging.getLogger()
@@ -31,10 +32,12 @@ class AETrainer(BaseTrainer):
         train_loader, _ = dataset.loaders(batch_size=self.batch_size, num_workers=self.n_jobs_dataloader)
 
         if self.use_stochastic_gates:
-            train_gates = Gates(train_loader.batch_sampler.sampler.data_source.indices, self.sigma_gates)
+            self.train_gates = Gates(train_loader.batch_sampler.sampler.data_source.indices, self.sigma_gates)
 
         # Set optimizer (Adam optimizer for now)
         optimizer = optim.Adam(ae_net.parameters(), lr=self.lr, weight_decay=self.weight_decay,
+                               amsgrad=self.optimizer_name == 'amsgrad')
+        gates_optimizer = optim.Adam(self.train_gates.parameters(), lr=self.lr, weight_decay=self.weight_decay,
                                amsgrad=self.optimizer_name == 'amsgrad')
 
         # Set learning rate scheduler
@@ -56,7 +59,7 @@ class AETrainer(BaseTrainer):
             for data in train_loader:
                 inputs, _, sample_idx = data
                 if self.use_stochastic_gates:
-                    curr_gates = train_gates.fetch_gates(sample_idx)
+                    curr_gates = self.train_gates.forward(sample_idx)
                 else:
                     curr_gates = torch.tensor(1).cuda()
                     self.lambda_val = 0
@@ -65,6 +68,7 @@ class AETrainer(BaseTrainer):
 
                 # Zero the network parameter gradients
                 optimizer.zero_grad()
+                gates_optimizer.zero_grad()
 
                 # Update network parameters via backpropagation: forward + backward + optimize
                 outputs = ae_net(inputs)
@@ -73,6 +77,7 @@ class AETrainer(BaseTrainer):
                 loss = torch.mean(scores_times_gates) - self.lambda_val * torch.sum(curr_gates)
                 loss.backward()
                 optimizer.step()
+                gates_optimizer.step()
 
                 loss_epoch += loss.item()
                 n_batches += 1
@@ -133,19 +138,20 @@ class AETrainer(BaseTrainer):
         logger.info('Autoencoder testing time: %.3f' % test_time)
         logger.info('Finished testing autoencoder.')
 
-class Gates:
+class Gates(torch.nn.Module):
     def __init__(self, indices, sigma_gates):
+        super(Gates, self).__init__()
         self.num_of_gates = len(indices)
-        self.mu = Variable(torch.ones([self.num_of_gates]), requires_grad=True).cuda()
+        self.mu = torch.nn.Parameter(torch.ones([self.num_of_gates], requires_grad=True).cuda()) #Variable
         self.sigma_gates = sigma_gates
         self.indices = np.array(indices)
 
-    def fetch_gates(self, curr_samples_ind):
+    def forward(self, curr_samples_ind):
         relevant_indices = []
         for i in curr_samples_ind:
             relevant_indices.append(np.argwhere(self.indices == i.cpu().detach().numpy())[0][0])
 
         chosen_gates = self.mu[relevant_indices]
-        unbounded_gates = chosen_gates + torch.normal(mean=torch.zeros_like(chosen_gates), std=self.sigma_gates).cuda() #torch.randn(size=(len(relevant_indices),)).cuda()
+        unbounded_gates = chosen_gates + torch.normal(mean=torch.zeros_like(chosen_gates), std=self.sigma_gates).cuda()
         clamped_gates = torch.clamp(unbounded_gates, min=0, max=1)
         return clamped_gates

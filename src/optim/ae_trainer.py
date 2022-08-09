@@ -33,12 +33,13 @@ class AETrainer(BaseTrainer):
 
         if self.use_stochastic_gates:
             self.train_gates = Gates(train_loader.batch_sampler.sampler.data_source.indices, self.sigma_gates)
+            gates_optimizer = optim.Adam(self.train_gates.parameters(), lr=self.lr, weight_decay=self.weight_decay,
+                                         amsgrad=self.optimizer_name == 'amsgrad')
 
         # Set optimizer (Adam optimizer for now)
         optimizer = optim.Adam(ae_net.parameters(), lr=self.lr, weight_decay=self.weight_decay,
                                amsgrad=self.optimizer_name == 'amsgrad')
-        gates_optimizer = optim.Adam(self.train_gates.parameters(), lr=self.lr, weight_decay=self.weight_decay,
-                               amsgrad=self.optimizer_name == 'amsgrad')
+
 
         # Set learning rate scheduler
         scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=self.lr_milestones, gamma=0.1)
@@ -68,7 +69,9 @@ class AETrainer(BaseTrainer):
 
                 # Zero the network parameter gradients
                 optimizer.zero_grad()
-                gates_optimizer.zero_grad()
+
+                if self.use_stochastic_gates:
+                    gates_optimizer.zero_grad()
 
                 # Update network parameters via backpropagation: forward + backward + optimize
                 outputs = ae_net(inputs)
@@ -77,7 +80,9 @@ class AETrainer(BaseTrainer):
                 loss = torch.mean(scores_times_gates) - self.lambda_val * torch.sum(curr_gates)
                 loss.backward()
                 optimizer.step()
-                gates_optimizer.step()
+
+                if self.use_stochastic_gates:
+                    gates_optimizer.step()
 
                 loss_epoch += loss.item()
                 n_batches += 1

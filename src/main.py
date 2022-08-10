@@ -1,9 +1,11 @@
+import os.path
+
 import click
 import torch
 import logging
 import random
 import numpy as np
-
+import csv
 from utils.config import Config
 from utils.visualization.plot_images_grid import plot_images_grid
 from deepSVDD import DeepSVDD
@@ -56,11 +58,14 @@ from datasets.main import load_dataset
 @click.option('--lambda_val', type=float, default=0.1, help='Specify lambda for stochastic gates loss.')
 @click.option('--sigma_gates', type=float, default=0.1, help='Std value for stochastic gates.')
 @click.option('--use_stochastic_gates', type=bool, default=False, help='Use stochastic gates loss in pretrain.')
+@click.option('--plot_results', type=bool, default=False)
+@click.option('--save_to_csv', type=bool, default=True)
+@click.option('--hyperparam_search', type=bool, default=True)
 
 def main(dataset_name, net_name, xp_path, data_path, load_config, load_model, objective, nu, device, seed,
          optimizer_name, lr, n_epochs, lr_milestone, batch_size, weight_decay, pretrain, ae_optimizer_name, ae_lr,
          ae_n_epochs, ae_lr_milestone, ae_batch_size, ae_weight_decay, n_jobs_dataloader, normal_class, lambda_val,
-         use_stochastic_gates, sigma_gates):
+         use_stochastic_gates, sigma_gates, plot_results, save_to_csv, hyperparam_search):
     """
     Deep SVDD, a fully deep method for anomaly detection.
 
@@ -85,13 +90,13 @@ def main(dataset_name, net_name, xp_path, data_path, load_config, load_model, ob
     logger.addHandler(file_handler)
 
     # Print arguments
-    logger.info('Log file is %s.' % log_file)
-    logger.info('Data path is %s.' % data_path)
-    logger.info('Export path is %s.' % xp_path)
-
-    logger.info('Dataset: %s' % dataset_name)
-    logger.info('Normal class: %d' % normal_class)
-    logger.info('Network: %s' % net_name)
+    # logger.info('Log file is %s.' % log_file)
+    # logger.info('Data path is %s.' % data_path)
+    # logger.info('Export path is %s.' % xp_path)
+    #
+    # logger.info('Dataset: %s' % dataset_name)
+    # logger.info('Normal class: %d' % normal_class)
+    # logger.info('Network: %s' % net_name)
 
     # If specified, load experiment config from JSON-file
     if load_config:
@@ -112,12 +117,75 @@ def main(dataset_name, net_name, xp_path, data_path, load_config, load_model, ob
     # Default device to 'cpu' if cuda is not available
     if not torch.cuda.is_available():
         device = 'cpu'
-    logger.info('Computation device: %s' % device)
-    logger.info('Number of dataloader workers: %d' % n_jobs_dataloader)
+    # logger.info('Computation device: %s' % device)
+    # logger.info('Number of dataloader workers: %d' % n_jobs_dataloader)
+    if cfg.settings['hyperparam_search']:
+        if dataset_name == 'mnist':
+            for normal_class in range(10):
+                cfg.settings["normal_class"] = normal_class
+                for lambda_val in [0, 0.01, 0.03]:
+                    cfg.settings["lambda_val"] = lambda_val
+                    if lambda_val == 0:
+                        cfg.settings["sigma_gates"] = 0
+                        use_stochastic_gates = False
+                        cfg.settings["use_stochastic_gates"] = use_stochastic_gates
+                        dataset, deep_SVDD = full_train_cycle(cfg, data_path, dataset_name, device, lambda_val,
+                                                              load_model, logger,
+                                                              n_jobs_dataloader, net_name, normal_class, pretrain,
+                                                              sigma_gates,
+                                                              use_stochastic_gates)
+                        save_results(cfg, dataset, deep_SVDD, xp_path)
+                    else:
+                        for sigma_gates in [0.01, 0.03]:
+                            cfg.settings["sigma_gates"] = sigma_gates
+                            use_stochastic_gates = True
+                            cfg.settings["use_stochastic_gates"] = use_stochastic_gates
+                            dataset, deep_SVDD = full_train_cycle(cfg, data_path, dataset_name, device, lambda_val,
+                                                                  load_model, logger,
+                                                                  n_jobs_dataloader, net_name, normal_class,
+                                                                  pretrain,
+                                                                  sigma_gates,
+                                                                  use_stochastic_gates)
+                            save_results(cfg, dataset, deep_SVDD, xp_path)
+        else:
+            a=1
+    else:
+        dataset, deep_SVDD = full_train_cycle(cfg, data_path, dataset_name, device, lambda_val, load_model, logger,
+                                              n_jobs_dataloader, net_name, normal_class, pretrain, sigma_gates,
+                                              use_stochastic_gates)
+        save_results(cfg, dataset, deep_SVDD, xp_path)
 
+    if cfg.settings['plot_results']:
+        plot_results(dataset, dataset_name, deep_SVDD, xp_path)
+
+
+
+
+def save_results(cfg, dataset, deep_SVDD, xp_path):
+    if cfg.settings['save_to_csv']:
+        results_csv_path = f"../log/{cfg.settings['dataset_name']}_test.csv"
+        if not os.path.exists(results_csv_path):
+            with open(results_csv_path, 'w') as f:
+                writer = csv.writer(f)
+                writer.writerow(["dataset", "normal_classes", "test_auc", "sigma_gates", "lambda_val", "lr",
+                                 "use_stochastic_gates"])
+
+        with open(results_csv_path, 'a+') as f:
+            writer = csv.writer(f)
+            writer.writerow([cfg.settings['dataset_name'], dataset.normal_classes, deep_SVDD.results['test_auc'],
+                             cfg.settings['sigma_gates'], cfg.settings['lambda_val'], cfg.settings['lr'],
+                             cfg.settings['use_stochastic_gates']])
+    else:
+        # Save results, model, and configuration
+        deep_SVDD.save_results(export_json=xp_path + '/results.json')
+        deep_SVDD.save_model(export_model=xp_path + '/model.tar')
+        cfg.save_config(export_json=xp_path + '/config.json')
+
+
+def full_train_cycle(cfg, data_path, dataset_name, device, lambda_val, load_model, logger, n_jobs_dataloader, net_name,
+                     normal_class, pretrain, sigma_gates, use_stochastic_gates):
     # Load data
     dataset = load_dataset(dataset_name, data_path, normal_class)
-
     # Initialize DeepSVDD model and set neural network \phi
     deep_SVDD = DeepSVDD(cfg.settings['objective'], cfg.settings['nu'])
     deep_SVDD.set_network(net_name)
@@ -125,16 +193,15 @@ def main(dataset_name, net_name, xp_path, data_path, load_config, load_model, ob
     if load_model:
         deep_SVDD.load_model(model_path=load_model, load_ae=True)
         logger.info('Loading model from %s.' % load_model)
-
     logger.info('Pretraining: %s' % pretrain)
     if pretrain:
         # Log pretraining details
-        logger.info('Pretraining optimizer: %s' % cfg.settings['ae_optimizer_name'])
-        logger.info('Pretraining learning rate: %g' % cfg.settings['ae_lr'])
-        logger.info('Pretraining epochs: %d' % cfg.settings['ae_n_epochs'])
-        logger.info('Pretraining learning rate scheduler milestones: %s' % (cfg.settings['ae_lr_milestone'],))
-        logger.info('Pretraining batch size: %d' % cfg.settings['ae_batch_size'])
-        logger.info('Pretraining weight decay: %g' % cfg.settings['ae_weight_decay'])
+        # logger.info('Pretraining optimizer: %s' % cfg.settings['ae_optimizer_name'])
+        # logger.info('Pretraining learning rate: %g' % cfg.settings['ae_lr'])
+        # logger.info('Pretraining epochs: %d' % cfg.settings['ae_n_epochs'])
+        # logger.info('Pretraining learning rate scheduler milestones: %s' % (cfg.settings['ae_lr_milestone'],))
+        # logger.info('Pretraining batch size: %d' % cfg.settings['ae_batch_size'])
+        # logger.info('Pretraining weight decay: %g' % cfg.settings['ae_weight_decay'])
 
         # Pretrain model on dataset (via autoencoder)
         deep_SVDD.pretrain(dataset,
@@ -149,15 +216,13 @@ def main(dataset_name, net_name, xp_path, data_path, load_config, load_model, ob
                            lambda_val=lambda_val,
                            use_stochastic_gates=use_stochastic_gates,
                            sigma_gates=sigma_gates)
-
     # Log training details
-    logger.info('Training optimizer: %s' % cfg.settings['optimizer_name'])
-    logger.info('Training learning rate: %g' % cfg.settings['lr'])
-    logger.info('Training epochs: %d' % cfg.settings['n_epochs'])
-    logger.info('Training learning rate scheduler milestones: %s' % (cfg.settings['lr_milestone'],))
-    logger.info('Training batch size: %d' % cfg.settings['batch_size'])
-    logger.info('Training weight decay: %g' % cfg.settings['weight_decay'])
-
+    # logger.info('Training optimizer: %s' % cfg.settings['optimizer_name'])
+    # logger.info('Training learning rate: %g' % cfg.settings['lr'])
+    # logger.info('Training epochs: %d' % cfg.settings['n_epochs'])
+    # logger.info('Training learning rate scheduler milestones: %s' % (cfg.settings['lr_milestone'],))
+    # logger.info('Training batch size: %d' % cfg.settings['batch_size'])
+    # logger.info('Training weight decay: %g' % cfg.settings['weight_decay'])
     # Train model on dataset
     deep_SVDD.train(dataset,
                     optimizer_name=cfg.settings['optimizer_name'],
@@ -167,16 +232,18 @@ def main(dataset_name, net_name, xp_path, data_path, load_config, load_model, ob
                     batch_size=cfg.settings['batch_size'],
                     weight_decay=cfg.settings['weight_decay'],
                     device=device,
-                    n_jobs_dataloader=n_jobs_dataloader)
-
+                    n_jobs_dataloader=n_jobs_dataloader,
+                    use_stochastic_gates=cfg.settings['use_stochastic_gates'])
     # Test model
     deep_SVDD.test(dataset, device=device, n_jobs_dataloader=n_jobs_dataloader)
+    return dataset, deep_SVDD
 
+
+def plot_results(dataset, dataset_name, deep_SVDD, xp_path):
     # Plot most anomalous and most normal (within-class) test samples
     indices, labels, scores = zip(*deep_SVDD.results['test_scores'])
     indices, labels, scores = np.array(indices), np.array(labels), np.array(scores)
     idx_sorted = indices[labels == 0][np.argsort(scores[labels == 0])]  # sorted from lowest to highest anomaly score
-
     if dataset_name in ('mnist', 'cifar10'):
 
         if dataset_name == 'mnist':
@@ -189,11 +256,6 @@ def main(dataset_name, net_name, xp_path, data_path, load_config, load_model, ob
 
         plot_images_grid(X_normals, export_img=xp_path + '/normals', title='Most normal examples', padding=2)
         plot_images_grid(X_outliers, export_img=xp_path + '/outliers', title='Most anomalous examples', padding=2)
-
-    # Save results, model, and configuration
-    deep_SVDD.save_results(export_json=xp_path + '/results.json')
-    deep_SVDD.save_model(export_model=xp_path + '/model.tar')
-    cfg.save_config(export_json=xp_path + '/config.json')
 
 
 if __name__ == '__main__':

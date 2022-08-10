@@ -8,7 +8,7 @@ import time
 import torch
 import torch.optim as optim
 import numpy as np
-
+from tqdm import tqdm
 
 class AETrainer(BaseTrainer):
 
@@ -23,7 +23,7 @@ class AETrainer(BaseTrainer):
         self.train_gates = None
 
     def train(self, dataset: BaseADDataset, ae_net: BaseNet):
-        logger = logging.getLogger()
+        # logger = logging.getLogger()
 
         # Set device for network
         ae_net = ae_net.to(self.device)
@@ -45,18 +45,18 @@ class AETrainer(BaseTrainer):
         scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=self.lr_milestones, gamma=0.1)
 
         # Training
-        logger.info('Starting pretraining...')
-        start_time = time.time()
+        # logger.info('Starting pretraining...')
+        # start_time = time.time()
         ae_net.train()
-        for epoch in range(self.n_epochs):
+        for epoch in tqdm(range(self.n_epochs)):
 
             scheduler.step()
-            if epoch in self.lr_milestones:
-                logger.info('  LR scheduler: new learning rate is %g' % float(scheduler.get_lr()[0]))
+            # if epoch in self.lr_milestones:
+            #     logger.info('  LR scheduler: new learning rate is %g' % float(scheduler.get_lr()[0]))
 
             loss_epoch = 0.0
             n_batches = 0
-            epoch_start_time = time.time()
+            # epoch_start_time = time.time()
             for data in train_loader:
                 inputs, _, sample_idx = data
                 if self.use_stochastic_gates:
@@ -88,13 +88,13 @@ class AETrainer(BaseTrainer):
                 n_batches += 1
 
             # log epoch statistics
-            epoch_train_time = time.time() - epoch_start_time
-            logger.info('  Epoch {}/{}\t Time: {:.3f}\t Loss: {:.8f}'
-                        .format(epoch + 1, self.n_epochs, epoch_train_time, loss_epoch / n_batches))
+            # epoch_train_time = time.time() - epoch_start_time
+            # logger.info('  Epoch {}/{}\t Time: {:.3f}\t Loss: {:.8f}'
+            #             .format(epoch + 1, self.n_epochs, epoch_train_time, loss_epoch / n_batches))
 
-        pretrain_time = time.time() - start_time
-        logger.info('Pretraining time: %.3f' % pretrain_time)
-        logger.info('Finished pretraining.')
+        # pretrain_time = time.time() - start_time
+        # logger.info('Pretraining time: %.3f' % pretrain_time)
+        # logger.info('Finished pretraining.')
 
         return ae_net
 
@@ -108,10 +108,10 @@ class AETrainer(BaseTrainer):
         _, test_loader = dataset.loaders(batch_size=self.batch_size, num_workers=self.n_jobs_dataloader)
 
         # Testing
-        logger.info('Testing autoencoder...')
+        # logger.info('Testing autoencoder...')
         loss_epoch = 0.0
         n_batches = 0
-        start_time = time.time()
+        # start_time = time.time()
         idx_label_score = []
         ae_net.eval()
         with torch.no_grad():
@@ -130,33 +130,36 @@ class AETrainer(BaseTrainer):
                 loss_epoch += loss.item()
                 n_batches += 1
 
-        logger.info('Test set Loss: {:.8f}'.format(loss_epoch / n_batches))
+        # logger.info('Test set Loss: {:.8f}'.format(loss_epoch / n_batches))
 
         _, labels, scores = zip(*idx_label_score)
         labels = np.array(labels)
         scores = np.array(scores)
 
         auc = roc_auc_score(labels, scores)
-        logger.info('Test set AUC: {:.2f}%'.format(100. * auc))
+        # logger.info('Test set AUC: {:.2f}%'.format(100. * auc))
 
-        test_time = time.time() - start_time
-        logger.info('Autoencoder testing time: %.3f' % test_time)
-        logger.info('Finished testing autoencoder.')
+        # test_time = time.time() - start_time
+        # logger.info('Autoencoder testing time: %.3f' % test_time)
+        # logger.info('Finished testing autoencoder.')
 
 class Gates(torch.nn.Module):
     def __init__(self, indices, sigma_gates):
         super(Gates, self).__init__()
         self.num_of_gates = len(indices)
-        self.mu = torch.nn.Parameter(torch.ones([self.num_of_gates], requires_grad=True).cuda()) #Variable
+        self.mu = torch.nn.Parameter(0.5 * torch.ones([self.num_of_gates], requires_grad=True).cuda()) #Variable
         self.sigma_gates = sigma_gates
         self.indices = np.array(indices)
 
     def forward(self, curr_samples_ind):
-        relevant_indices = []
-        for i in curr_samples_ind:
-            relevant_indices.append(np.argwhere(self.indices == i.cpu().detach().numpy())[0][0])
-
-        chosen_gates = self.mu[relevant_indices]
+        chosen_gates = self.get_curr_mu(curr_samples_ind)
         unbounded_gates = chosen_gates + torch.normal(mean=torch.zeros_like(chosen_gates), std=self.sigma_gates).cuda()
         clamped_gates = torch.clamp(unbounded_gates, min=0, max=1)
         return clamped_gates
+
+    def get_curr_mu(self, curr_samples_ind):
+        relevant_indices = []
+        for i in curr_samples_ind:
+            relevant_indices.append(np.argwhere(self.indices == i.cpu().detach().numpy())[0][0])
+        chosen_gates = self.mu[relevant_indices]
+        return chosen_gates

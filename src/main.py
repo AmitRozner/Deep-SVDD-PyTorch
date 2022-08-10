@@ -10,7 +10,7 @@ from utils.config import Config
 from utils.visualization.plot_images_grid import plot_images_grid
 from deepSVDD import DeepSVDD
 from datasets.main import load_dataset
-
+from tqdm import tqdm
 
 ################################################################################
 # Settings
@@ -120,35 +120,32 @@ def main(dataset_name, net_name, xp_path, data_path, load_config, load_model, ob
     # logger.info('Computation device: %s' % device)
     # logger.info('Number of dataloader workers: %d' % n_jobs_dataloader)
     if cfg.settings['hyperparam_search']:
-        if dataset_name == 'mnist':
-            for normal_class in range(10):
-                cfg.settings["normal_class"] = normal_class
-                for lambda_val in [0, 0.01, 0.03]:
-                    cfg.settings["lambda_val"] = lambda_val
-                    if lambda_val == 0:
-                        cfg.settings["sigma_gates"] = 0
-                        use_stochastic_gates = False
+        for normal_class in tqdm(range(10)):
+            cfg.settings["normal_class"] = normal_class
+            for lambda_val in [0, 0.01, 0.03]:
+                cfg.settings["lambda_val"] = lambda_val
+                if lambda_val == 0:
+                    cfg.settings["sigma_gates"] = 0
+                    use_stochastic_gates = False
+                    cfg.settings["use_stochastic_gates"] = use_stochastic_gates
+                    dataset, deep_SVDD = full_train_cycle(cfg, data_path, dataset_name, device, lambda_val,
+                                                          load_model, logger,
+                                                          n_jobs_dataloader, net_name, normal_class, pretrain,
+                                                          sigma_gates,
+                                                          use_stochastic_gates)
+                    save_results(cfg, dataset, deep_SVDD, xp_path)
+                else:
+                    for sigma_gates in [0.01, 0.03]:
+                        cfg.settings["sigma_gates"] = sigma_gates
+                        use_stochastic_gates = True
                         cfg.settings["use_stochastic_gates"] = use_stochastic_gates
                         dataset, deep_SVDD = full_train_cycle(cfg, data_path, dataset_name, device, lambda_val,
                                                               load_model, logger,
-                                                              n_jobs_dataloader, net_name, normal_class, pretrain,
+                                                              n_jobs_dataloader, net_name, normal_class,
+                                                              pretrain,
                                                               sigma_gates,
                                                               use_stochastic_gates)
                         save_results(cfg, dataset, deep_SVDD, xp_path)
-                    else:
-                        for sigma_gates in [0.01, 0.03]:
-                            cfg.settings["sigma_gates"] = sigma_gates
-                            use_stochastic_gates = True
-                            cfg.settings["use_stochastic_gates"] = use_stochastic_gates
-                            dataset, deep_SVDD = full_train_cycle(cfg, data_path, dataset_name, device, lambda_val,
-                                                                  load_model, logger,
-                                                                  n_jobs_dataloader, net_name, normal_class,
-                                                                  pretrain,
-                                                                  sigma_gates,
-                                                                  use_stochastic_gates)
-                            save_results(cfg, dataset, deep_SVDD, xp_path)
-        else:
-            a=1
     else:
         dataset, deep_SVDD = full_train_cycle(cfg, data_path, dataset_name, device, lambda_val, load_model, logger,
                                               n_jobs_dataloader, net_name, normal_class, pretrain, sigma_gates,

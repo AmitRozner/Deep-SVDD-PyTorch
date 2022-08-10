@@ -8,7 +8,7 @@ import time
 import torch
 import torch.optim as optim
 import numpy as np
-from tqdm import tqdm
+
 
 class AETrainer(BaseTrainer):
 
@@ -48,7 +48,7 @@ class AETrainer(BaseTrainer):
         # logger.info('Starting pretraining...')
         # start_time = time.time()
         ae_net.train()
-        for epoch in tqdm(range(self.n_epochs)):
+        for epoch in range(self.n_epochs):
 
             scheduler.step()
             # if epoch in self.lr_milestones:

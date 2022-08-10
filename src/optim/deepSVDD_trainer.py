@@ -3,7 +3,6 @@ from base.base_dataset import BaseADDataset
 from base.base_net import BaseNet
 from torch.utils.data.dataloader import DataLoader
 from sklearn.metrics import roc_auc_score
-from tqdm import tqdm
 import logging
 import time
 import torch
@@ -63,7 +62,7 @@ class DeepSVDDTrainer(BaseTrainer):
         # logger.info('Starting training...')
         start_time = time.time()
         net.train()
-        for epoch in tqdm(range(self.n_epochs)):
+        for epoch in range(self.n_epochs):
 
             scheduler.step()
             # if epoch in self.lr_milestones:
